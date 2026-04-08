@@ -122,12 +122,14 @@ namespace DotNetPlugin
 
         private bool _isRunning = false;
 
-        public void Start()
+        public bool IsRunning => _isRunning;
+
+        public bool Start()
         {
             if (_isRunning)
             {
                 Console.WriteLine("MCP server is already running.");
-                return;
+                return true;
             }
 
             try
@@ -136,31 +138,28 @@ namespace DotNetPlugin
                 _listener.BeginGetContext(OnRequest, null);
                 _isRunning = true;
                 Console.WriteLine("MCP server started. CurrentlyDebugging: " + Bridge.DbgIsDebugging() + " IsRunning: " + Bridge.DbgIsRunning());
+                return true;
             }
             catch (Exception ex)
             {
+                _isRunning = false;
                 Console.WriteLine("Failed to start MCP server: " + ex.Message);
+                return false;
             }
         }
 
         public void Stop()
         {
-            if (!_isRunning)
-            {
-                Console.WriteLine("MCP server is already stopped.");
-                _isRunning = false;
-                return;
-            }
-
             try
             {
-                // prevent re-arming new contexts while stopping
+                bool wasRunning = _isRunning;
                 _isRunning = false;
 
-                // stop listener first to abort pending accepts
-                _listener.Stop();
+                if (_listener.IsListening)
+                {
+                    _listener.Stop();
+                }
 
-                // dispose any active SSE writers
                 lock (_sseSessions)
                 {
                     foreach (var kv in _sseSessions)
@@ -170,7 +169,8 @@ namespace DotNetPlugin
                     _sseSessions.Clear();
                 }
 
-                Console.WriteLine("MCP server stopped.");
+                _listener.Close();
+                Console.WriteLine(wasRunning ? "MCP server stopped." : "MCP server was not running.");
             }
             catch (Exception ex)
             {

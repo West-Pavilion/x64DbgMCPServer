@@ -44,7 +44,15 @@ namespace DotNetPlugin
 
         public override Task<bool> StopAsync()
         {
-            // Do additional cleanup here.
+            try
+            {
+                Plugin.cbStopMCPServer(null);
+            }
+            catch (Exception ex)
+            {
+                LogError("Failed to stop MCP server during plugin shutdown: " + ex.Message);
+                return Task.FromResult(false);
+            }
 
             return Task.FromResult(true);
         }
