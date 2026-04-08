@@ -44,8 +44,8 @@ namespace DotNetPlugin
             _listener.Prefixes.Add($"{baseUrl}sse/"); //Request come in without a trailing '/' but are still handled
             _listener.Prefixes.Add($"{baseUrl}message/");
 
-            //_listener.Prefixes.Add("http://127.0.0.1:50300/sse/"); //Request come in without a trailing '/' but are still handled
-            //_listener.Prefixes.Add("http://127.0.0.1:50300/message/");
+            //_listener.Prefixes.Add("http://127.0.0.1:45000/sse/"); //Request come in without a trailing '/' but are still handled
+            //_listener.Prefixes.Add("http://127.0.0.1:45000/message/");
             // Reflect and register [Command] methods
             foreach (var method in commandSourceType.GetMethods(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
             {
@@ -327,7 +327,7 @@ namespace DotNetPlugin
                         {
 
                             //POST / message?sessionId=nn-PaJBhGnUTSs8Wi9IYeA HTTP / 1.1
-                            //Host: localhost: 50300
+                            //Host: localhost: 45000
                             //Content-Type: application/json; charset=utf-8
                             //Content-Length: 202
 
@@ -393,7 +393,7 @@ namespace DotNetPlugin
                         {
 
                             //POST / message?sessionId=nn-PaJBhGnUTSs8Wi9IYeA HTTP / 1.1
-                            //Host: localhost: 50300
+                            //Host: localhost: 45000
                             //Content-Type: application/json; charset=utf-8
                             //Content-Length: 202
 
@@ -416,7 +416,7 @@ namespace DotNetPlugin
                         else if (method == "tools/list")
                         {
                             //POST /message?sessionId=nn-PaJBhGnUTSs8Wi9IYeA HTTP/1.1
-                            //Host: localhost: 50300
+                            //Host: localhost: 45000
                             //Content-Type: application/json; charset=utf-8
                             //Content-Length: 202
                             //{"jsonrpc":"2.0","id":"d95cc745587346b4bf7df2b13ec0890a-2","method":"tools/list"}
@@ -589,7 +589,7 @@ namespace DotNetPlugin
                         else if (method == "tools/call")
                         {
                             //POST / message?sessionId=nn-PaJBhGnUTSs8Wi9IYeA HTTP / 1.1
-                            //Host: localhost: 50300
+                            //Host: localhost: 45000
                             //Content-Type: application/json; charset=utf-8
                             //Content-Length: 202
                             //{ "jsonrpc":"2.0","id":"d95cc745587346b4bf7df2b13ec0890a-3","method":"tools/call","params":{ "name":"Echo","arguments":{ "message":"tesrt"} } }

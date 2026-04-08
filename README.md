@@ -21,7 +21,7 @@ Cursor Connection:
 {
   "mcpServers": {
     "AgentSmithers X64Dbg MCP Server": {
-      "url": "http://127.0.0.1:50300/sse"
+      "url": "http://127.0.0.1:45000/sse"
     }
   }
 }
@@ -39,7 +39,7 @@ Claude Configuration Connection:
   "mcpServers": {
     "x64Dbg": {
       "command": "C:\\MCPProxy-STDIO-to-SSE.exe",
-      "args": ["http://localhost:50300"]
+      "args": ["http://localhost:45000"]
     }
   }
 }
@@ -59,7 +59,7 @@ Claude Configuration Connection:
   "mcpServers": {
     "AgentSmithers x64Dbg STDIO<->SSE": {
       "command": "C:\\MCPProxy-STDIO-to-SSE.exe",
-      "args": ["http://localhost:50300"]
+      "args": ["http://localhost:45000"]
     }
   }
 }
@@ -73,7 +73,7 @@ Known: Context deadline exceeded (timeout) issue with directly using SSE.
 
 Open the project
 Edit line 590 in Program.cs and enter your GeminiAI key from Google Cloud API.
-Edit line 615 in Program.cs and enter in your MCP Server IP: Location = "http://192.168.x.x:50300/sse",
+Edit line 615 in Program.cs and enter in your MCP Server IP: Location = "http://192.168.x.x:45000/sse",
 Open your x96 debugger, your logs should reflect that the server automatically loaded.
 To interact with the server by hand instead of using the AI, uncomment line 634 and comment out line 635.
 Hit start debug on the client and the AI should automatically execute the Prompt located on line 434 (Program.cs)
@@ -131,7 +131,7 @@ Sample Debug log when loaded
 
 Start the Debugger, goto plugins -> Click "Start MCP Server"
 
-Connect to it with your prefered MCP Client on port 50300 via SSE.
+Connect to it with your prefered MCP Client on port 45000 via SSE.
 
 ### Checking command results
 
@@ -159,8 +159,8 @@ If you see `Failed to start MCP server: Access is denied` in the x64dbg logs (Al
 **Option 2: Grant URL permissions (Recommended)**
 Run these commands in an elevated PowerShell/Command Prompt:
 ```cmd
-netsh http add urlacl url=http://+:50300/sse/ user=Everyone
-netsh http add urlacl url=http://+:50300/message/ user=Everyone
+netsh http add urlacl url=http://+:45000/sse/ user=Everyone
+netsh http add urlacl url=http://+:45000/message/ user=Everyone
 ```
 
 After running these commands, you can start x64dbg normally and the MCP server will work.
@@ -203,7 +203,7 @@ The MCP server runs a simple HTTP listener and routes incoming commands to C# me
 
 ## Known Issues
 ExecuteDebuggerCommand always returns true as it pertains to the comment successfully being execute and not the results of the actual command.(Fix was implemented,needs checking.)\
-Currently the already compiled version is set to listen on all IP's on port 50300 thus requiring Administrative privileges. Future releases will look to detect this and will listen only on 127.0.0.1 so it may be used without administrative privileges.(See the `Troubleshooting` section)
+Currently the already compiled version is set to listen on all IP's on port 45000 thus requiring Administrative privileges. Future releases will look to detect this and will listen only on 127.0.0.1 so it may be used without administrative privileges.(See the `Troubleshooting` section)
 
 If upon launch x64/x32 dbg crashes, ensure the DLL's are not being blocked by windows.
 This causes .NET Framework to refuse loading the assemblies for security reasons.

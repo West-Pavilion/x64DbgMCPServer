@@ -11,7 +11,7 @@ namespace DotNetPlugin
     public class McpServerConfig
     {
         public string IpAddress { get; set; } = "+";
-        public int Port { get; set; } = 50300;
+        public int Port { get; set; } = 45000;
 
         private static string _configPath;
 
@@ -32,7 +32,7 @@ namespace DotNetPlugin
         }
 
         /// <summary>
-        /// Gets the base URL for the HTTP listener (e.g., "http://+:50300/").
+        /// Gets the base URL for the HTTP listener (e.g., "http://+:45000/").
         /// </summary>
         public string GetBaseUrl()
         {
@@ -66,7 +66,7 @@ namespace DotNetPlugin
                         if (string.IsNullOrWhiteSpace(config.IpAddress))
                             config.IpAddress = "+";
                         if (config.Port < 1 || config.Port > 65535)
-                            config.Port = 50300;
+                            config.Port = 45000;
                         return config;
                     }
                 }

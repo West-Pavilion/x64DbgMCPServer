@@ -1,0 +1,72 @@
+name: Build And Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      NUGET_PACKAGES: ${{ github.workspace }}\packages
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore x64
+        run: msbuild x64DbgMCPServer.sln /t:Restore /p:Platform=x64 /p:Configuration=Debug /p:RestorePackagesPath="${{ env.NUGET_PACKAGES }}" /p:BaseIntermediateOutputPath=.cache\obj\
+
+      - name: Build x64 Debug
+        run: msbuild x64DbgMCPServer.sln /t:Rebuild /p:Platform=x64 /p:Configuration=Debug /p:RestorePackagesPath="${{ env.NUGET_PACKAGES }}" /p:BaseIntermediateOutputPath=.cache\obj\ /p:BaseOutputPath=.cache\bin\
+
+      - name: Restore x86
+        run: msbuild x64DbgMCPServer.sln /t:Restore /p:Platform=x86 /p:Configuration=Debug /p:RestorePackagesPath="${{ env.NUGET_PACKAGES }}" /p:BaseIntermediateOutputPath=.cache\obj\
+
+      - name: Build x86 Debug
+        run: msbuild x64DbgMCPServer.sln /t:Rebuild /p:Platform=x86 /p:Configuration=Debug /p:RestorePackagesPath="${{ env.NUGET_PACKAGES }}" /p:BaseIntermediateOutputPath=.cache\obj\ /p:BaseOutputPath=.cache\bin\
+
+      - name: Package release assets
+        shell: pwsh
+        run: |
+          $releaseDir = Join-Path $env:RUNNER_TEMP 'release-assets'
+          $x64Dir = Join-Path $releaseDir 'x64'
+          $x86Dir = Join-Path $releaseDir 'x86'
+
+          New-Item -ItemType Directory -Force -Path $x64Dir | Out-Null
+          New-Item -ItemType Directory -Force -Path $x86Dir | Out-Null
+
+          Copy-Item -Path 'bin\x64\Debug\*' -Destination $x64Dir -Recurse -Force
+          Copy-Item -Path 'bin\x86\Debug\*' -Destination $x86Dir -Recurse -Force
+
+          Compress-Archive -Path (Join-Path $x64Dir '*') -DestinationPath (Join-Path $releaseDir 'x64DbgMCPServer-x64.zip') -Force
+          Compress-Archive -Path (Join-Path $x86Dir '*') -DestinationPath (Join-Path $releaseDir 'x64DbgMCPServer-x86.zip') -Force
+
+          "RELEASE_DIR=$releaseDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            ${{ env.RELEASE_DIR }}\x64DbgMCPServer-x64.zip
+            ${{ env.RELEASE_DIR }}\x64DbgMCPServer-x86.zip
+
+      - name: Cleanup caches
+        if: always()
+        shell: pwsh
+        run: |
+          Remove-Item -Recurse -Force .cache -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force packages -ErrorAction SilentlyContinue
