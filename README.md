@@ -159,6 +159,7 @@ If you see `Failed to start MCP server: Access is denied` in the x64dbg logs (Al
 **Option 2: Grant URL permissions (Recommended)**
 Run these commands in an elevated PowerShell/Command Prompt:
 ```cmd
+netsh http add urlacl url=http://+:45000/mcp/ user=Everyone
 netsh http add urlacl url=http://+:45000/sse/ user=Everyone
 netsh http add urlacl url=http://+:45000/message/ user=Everyone
 ```

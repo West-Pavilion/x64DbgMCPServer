@@ -42,9 +42,11 @@ namespace DotNetPlugin
             Console.WriteLine($"Connect via Streamable HTTP: {_config.GetStreamableDisplayUrl()}");
             Console.WriteLine($"Legacy SSE endpoint: {_config.GetDisplayUrl()}");
             
+            _listener.Prefixes.Add($"{baseUrl}mcp/");
             _listener.Prefixes.Add($"{baseUrl}sse/"); //Request come in without a trailing '/' but are still handled
             _listener.Prefixes.Add($"{baseUrl}message/");
 
+            //_listener.Prefixes.Add("http://127.0.0.1:45000/mcp/");
             //_listener.Prefixes.Add("http://127.0.0.1:45000/sse/"); //Request come in without a trailing '/' but are still handled
             //_listener.Prefixes.Add("http://127.0.0.1:45000/message/");
             // Reflect and register [Command] methods
