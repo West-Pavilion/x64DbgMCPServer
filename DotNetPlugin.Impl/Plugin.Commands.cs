@@ -109,7 +109,8 @@ namespace DotNetPlugin
 
             GSimpleMcpServer = server;
             Console.WriteLine("MCPServer Started");
-            Console.WriteLine($"MCP Server URL: {GMcpServerConfig.GetDisplayUrl()}");
+            Console.WriteLine($"MCP Streamable HTTP URL: {GMcpServerConfig.GetStreamableDisplayUrl()}");
+            Console.WriteLine($"MCP Legacy SSE URL: {GMcpServerConfig.GetDisplayUrl()}");
         }
 
         [Command("StopMCPServer", DebugOnly = false)]

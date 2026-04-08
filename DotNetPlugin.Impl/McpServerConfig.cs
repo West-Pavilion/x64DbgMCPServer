@@ -49,6 +49,15 @@ namespace DotNetPlugin
         }
 
         /// <summary>
+        /// Gets the Streamable HTTP endpoint URL for modern MCP clients.
+        /// </summary>
+        public string GetStreamableDisplayUrl()
+        {
+            string displayIp = IpAddress == "+" ? "127.0.0.1" : IpAddress;
+            return $"http://{displayIp}:{Port}/mcp";
+        }
+
+        /// <summary>
         /// Loads the configuration from the JSON file, or returns default settings if the file doesn't exist.
         /// </summary>
         public static McpServerConfig Load()

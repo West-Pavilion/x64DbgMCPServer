@@ -39,7 +39,8 @@ namespace DotNetPlugin
             
             string baseUrl = _config.GetBaseUrl();
             Console.WriteLine($"MCP server listening on {baseUrl}");
-            Console.WriteLine($"Connect via: {_config.GetDisplayUrl()}");
+            Console.WriteLine($"Connect via Streamable HTTP: {_config.GetStreamableDisplayUrl()}");
+            Console.WriteLine($"Legacy SSE endpoint: {_config.GetDisplayUrl()}");
             
             _listener.Prefixes.Add($"{baseUrl}sse/"); //Request come in without a trailing '/' but are still handled
             _listener.Prefixes.Add($"{baseUrl}message/");
@@ -201,7 +202,86 @@ namespace DotNetPlugin
     }
 
         static bool pDebug = false;
-    private static readonly Dictionary<string, StreamWriter> _sseSessions = new Dictionary<string, StreamWriter>();
+        private const string DefaultProtocolVersion = "2024-11-05";
+        private static readonly Dictionary<string, StreamWriter> _sseSessions = new Dictionary<string, StreamWriter>();
+
+        private static string CreateSessionId()
+        {
+            using (var rng = RandomNumberGenerator.Create())
+            {
+                byte[] randomBytes = new byte[16];
+                rng.GetBytes(randomBytes);
+
+                string base64String = Convert.ToBase64String(randomBytes);
+                return base64String.TrimEnd('=').Replace('/', 'A').Replace('+', '-');
+            }
+        }
+
+        private static string GetStreamableSessionId(HttpListenerRequest request)
+        {
+            return request.Headers["MCP-Session-Id"] ?? request.Headers["Mcp-Session-Id"];
+        }
+
+        private static void SendAcceptedResponse(HttpListenerContext ctx)
+        {
+            ctx.Response.StatusCode = 202;
+            ctx.Response.ContentLength64 = 0;
+            ctx.Response.Close();
+        }
+
+        private static void SendJsonResponse(HttpListenerContext ctx, object payload, string sessionId = null, int statusCode = 200)
+        {
+            var json = new JavaScriptSerializer().Serialize(payload);
+            var buffer = Encoding.UTF8.GetBytes(json);
+
+            ctx.Response.StatusCode = statusCode;
+            ctx.Response.ContentType = "application/json";
+            ctx.Response.ContentEncoding = Encoding.UTF8;
+
+            if (!string.IsNullOrWhiteSpace(sessionId))
+            {
+                ctx.Response.Headers["MCP-Session-Id"] = sessionId;
+            }
+
+            ctx.Response.ContentLength64 = buffer.Length;
+            ctx.Response.OutputStream.Write(buffer, 0, buffer.Length);
+            ctx.Response.Close();
+        }
+
+        private static void SendSsePayload(string sessionId, object payload, object requestId = null)
+        {
+            var sseData = new JavaScriptSerializer().Serialize(payload);
+
+            lock (_sseSessions)
+            {
+                var writer = _sseSessions[sessionId];
+                if (requestId != null)
+                {
+                    writer.Write($"id: {requestId}\n");
+                }
+
+                writer.Write($"data: {sseData}\n\n");
+                writer.Flush();
+            }
+        }
+
+        private static string GetRequestedProtocolVersion(Dictionary<string, object> json)
+        {
+            if (json != null &&
+                json.TryGetValue("params", out var rawParams) &&
+                rawParams is Dictionary<string, object> paramsDict &&
+                paramsDict.TryGetValue("protocolVersion", out var rawProtocolVersion))
+            {
+                return rawProtocolVersion?.ToString();
+            }
+
+            return null;
+        }
+
+        private static string GetServerVersion()
+        {
+            return typeof(SimpleMcpServer).Assembly.GetName().Version?.ToString() ?? "1.0.0.0";
+        }
 
         private async void OnRequest(IAsyncResult ar) // Make async void for simplicity here, consider Task for robustness
         {
@@ -247,10 +327,14 @@ namespace DotNetPlugin
             {
                 var path = ctx.Request.Url.AbsolutePath.ToLowerInvariant();
 
-                if (path.StartsWith("/message"))
+                bool isLegacySsePost = path.StartsWith("/message") && !string.IsNullOrWhiteSpace(ctx.Request.QueryString["sessionId"]);
+                bool isStreamableHttpPost = !isLegacySsePost &&
+                    (path.StartsWith("/sse") || path.StartsWith("/message") || path.StartsWith("/mcp"));
+
+                if (isLegacySsePost || isStreamableHttpPost)
                 {
                     var query = ctx.Request.QueryString["sessionId"];
-                    if (string.IsNullOrWhiteSpace(query) || !_sseSessions.ContainsKey(query))
+                    if (isLegacySsePost && (string.IsNullOrWhiteSpace(query) || !_sseSessions.ContainsKey(query)))
                     {
                         ctx.Response.StatusCode = 400;
                         ctx.Response.OutputStream.Close();
@@ -290,6 +374,7 @@ namespace DotNetPlugin
 
                         string method = json["method"]?.ToString();
                         var @params = json.ContainsKey("params") ? json["params"] as object[] : null;
+                        var requestId = json.ContainsKey("id") ? json["id"] : null;
 
                         if (method == "rpc.discover")
                         {
@@ -310,108 +395,84 @@ namespace DotNetPlugin
                                 result = toolList
                             };
 
-                            var sseData = new JavaScriptSerializer().Serialize(response);
-
-                            lock (_sseSessions)
+                            if (isStreamableHttpPost)
                             {
-                                var writer = _sseSessions[query];
-                                writer.Write($"id: {json["id"]}\n");
-                                writer.Write($"data: {sseData}\n\n");
-                                writer.Flush();
+                                SendJsonResponse(ctx, response);
                             }
+                            else
+                            {
+                                SendSsePayload(query, response, requestId);
+                                SendAcceptedResponse(ctx);
+                            }
+                        }
+                        else if (method == "ping")
+                        {
+                            var response = new
+                            {
+                                jsonrpc = "2.0",
+                                id = requestId,
+                                result = new { }
+                            };
 
-                            ctx.Response.StatusCode = 202;
-                            ctx.Response.Close();
+                            if (isStreamableHttpPost)
+                            {
+                                SendJsonResponse(ctx, response);
+                            }
+                            else
+                            {
+                                SendSsePayload(query, response, requestId);
+                                SendAcceptedResponse(ctx);
+                            }
                         }
                         else if (method == "initialize")
                         {
-
-                            //POST / message?sessionId=nn-PaJBhGnUTSs8Wi9IYeA HTTP / 1.1
-                            //Host: localhost: 45000
-                            //Content-Type: application/json; charset=utf-8
-                            //Content-Length: 202
-
-                            //{ "jsonrpc":"2.0","id":"7b9343b583174f88bf926c1341bdf2a3-1","method":"initialize","params":{ "protocolVersion":"2024-11-05","capabilities":{ },"clientInfo":{ "name":"QuickstartClient","version":"1.0.0.0"} } }
-                            //                            HTTP / 1.1 202 Accepted
-                            //                            Date: Wed, 02 Apr 2025 03:44:44 GMT
-                            //                            Server: Kestrel
-                            //Transfer - Encoding: chunked
-
-                            //Accepted
-                            ctx.Response.SendChunked = true;
-                            ctx.Response.StatusCode = 202;
-                            //ctx.Response.ContentType = "text/plain; charset=utf-8";
-                            using (var responseWriter = new StreamWriter(ctx.Response.OutputStream, new UTF8Encoding(false)))
+                            string protocolVersion = GetRequestedProtocolVersion(json);
+                            if (string.IsNullOrWhiteSpace(protocolVersion))
                             {
+                                protocolVersion = DefaultProtocolVersion;
+                            }
 
-                                responseWriter.Write($"Accepted");
-                                responseWriter.Flush();
+                            var initializeResponse = new
+                            {
+                                jsonrpc = "2.0",
+                                id = requestId,
+                                result = new
+                                {
+                                    protocolVersion = protocolVersion,
+                                    capabilities = new { tools = new { } },
+                                    serverInfo = new { name = "x64DbgMCPServer", version = GetServerVersion() },
+                                    instructions = ""
+                                }
+                            };
 
+                            if (isStreamableHttpPost)
+                            {
+                                string sessionId = GetStreamableSessionId(ctx.Request);
+                                if (string.IsNullOrWhiteSpace(sessionId))
+                                {
+                                    sessionId = CreateSessionId();
+                                }
+
+                                SendJsonResponse(ctx, initializeResponse, sessionId);
+                            }
+                            else
+                            {
                                 try
                                 {
-                                    var discoverResponse = new JavaScriptSerializer().Serialize(new
-                                    {
-                                        jsonrpc = "2.0",
-                                        id = json["id"],
-                                        result = new
-                                        {
-                                            protocolVersion = "2024-11-05",
-                                            capabilities = new { tools = new { } },
-                                            serverInfo = new { name = "AspNetCoreSseServer", version = "1.0.0.0" },
-                                            instructions = ""
-                                        }
-                                    });
-
-                                    StreamWriter writer;
-                                    lock (_sseSessions)
-                                    {
-                                        writer = _sseSessions[query];
-                                        writer.Write($"data: {discoverResponse}\n\n");
-                                        writer.Flush();
-                                    }
-
+                                    SendSsePayload(query, initializeResponse);
                                     Debug.WriteLine("Responding with Session:" + query);
                                 }
                                 catch (Exception ex)
                                 {
                                     Console.WriteLine($"SSE connection error: {ex.Message}");
                                 }
-                                finally
-                                {
-                                    //lock (_sseSessions)
-                                    //    _sseSessions.Remove(sessionId);
-                                    //ctx.Response.Close();
-                                }
-                                //responseWriter.Write("Accepted");
-                                //responseWriter.Flush();
-                                //responseWriter.Close();
-                                // Don't close the writer or ctx.Response — keep it open for future use
-                                //await Task.Delay(-1); // keep this handler alive forever (or until cancelled)
+
+                                SendAcceptedResponse(ctx);
                             }
                         }
                         else if (method == "notifications/initialized")
                         {
-
-                            //POST / message?sessionId=nn-PaJBhGnUTSs8Wi9IYeA HTTP / 1.1
-                            //Host: localhost: 45000
-                            //Content-Type: application/json; charset=utf-8
-                            //Content-Length: 202
-
-                            //{ "jsonrpc":"2.0","id":"7b9343b583174f88bf926c1341bdf2a3-1","method":"initialize","params":{ "protocolVersion":"2024-11-05","capabilities":{ },"clientInfo":{ "name":"QuickstartClient","version":"1.0.0.0"} } }
-                            //                            HTTP / 1.1 202 Accepted
-                            //                            Date: Wed, 02 Apr 2025 03:44:44 GMT
-                            //                            Server: Kestrel
-                            //Transfer - Encoding: chunked
-
-                            //Accepted
-                            ctx.Response.SendChunked = true;
-                            ctx.Response.StatusCode = 202;
-                            //ctx.Response.ContentType = "text/plain; charset=utf-8";
-                            using (var responseWriter = new StreamWriter(ctx.Response.OutputStream, new UTF8Encoding(false)))
-                            {
-                                responseWriter.Write("Accepted");
-                                responseWriter.BaseStream.Flush();
-                            }
+                            SendAcceptedResponse(ctx);
                         }
                         else if (method == "tools/list")
                         {
@@ -420,15 +481,6 @@ namespace DotNetPlugin
                             //Content-Type: application/json; charset=utf-8
                             //Content-Length: 202
                             //{"jsonrpc":"2.0","id":"d95cc745587346b4bf7df2b13ec0890a-2","method":"tools/list"}
-                            //Accepted
-                            ctx.Response.SendChunked = true;
-                            ctx.Response.StatusCode = 202;
-                            //ctx.Response.ContentType = "text/plain; charset=utf-8";
-                            using (var responseWriter = new StreamWriter(ctx.Response.OutputStream, new UTF8Encoding(false)))
-                            {
-                                responseWriter.Write("Accepted");
-                                responseWriter.BaseStream.Flush();
-                            }
                             try
                             {
                                 // Dynamically get all Command methods
@@ -556,34 +608,51 @@ namespace DotNetPlugin
                                     }
                                 );
 
-                                var discoverResponse = new JavaScriptSerializer().Serialize(new
+                                var discoverResponse = new
                                 {
                                     jsonrpc = "2.0",
-                                    id = json["id"],
+                                    id = requestId,
                                     result = new
                                     {
                                         tools = toolsList.ToArray()
                                     }
-                                });
+                                };
 
-                                StreamWriter writer;
-                                lock (_sseSessions)
+                                if (isStreamableHttpPost)
                                 {
-                                    writer = _sseSessions[query];
-                                    writer.Write($"data: {discoverResponse}\n\n");
-                                    writer.Flush();
+                                    SendJsonResponse(ctx, discoverResponse);
                                 }
-                                Debug.WriteLine("Responding with Session:" + query);
+                                else
+                                {
+                                    SendSsePayload(query, discoverResponse);
+                                    Debug.WriteLine("Responding with Session:" + query);
+                                    SendAcceptedResponse(ctx);
+                                }
                             }
                             catch (Exception ex)
                             {
                                 Console.WriteLine($"SSE connection error: {ex.Message}");
-                            }
-                            finally
-                            {
-                                //lock (_sseSessions)
-                                //    _sseSessions.Remove(sessionId);
-                                //ctx.Response.Close();
+                                if (isStreamableHttpPost)
+                                {
+                                    var errorResponse = new
+                                    {
+                                        jsonrpc = "2.0",
+                                        id = requestId,
+                                        error = new { code = -32603, message = ex.Message }
+                                    };
+                                    SendJsonResponse(ctx, errorResponse);
+                                }
+                                else
+                                {
+                                    var errorResponse = new
+                                    {
+                                        jsonrpc = "2.0",
+                                        id = requestId,
+                                        error = new { code = -32603, message = ex.Message }
+                                    };
+                                    SendSsePayload(query, errorResponse, requestId);
+                                    SendAcceptedResponse(ctx);
+                                }
                             }
                         }
                         else if (method == "tools/call")
@@ -593,15 +662,6 @@ namespace DotNetPlugin
                             //Content-Type: application/json; charset=utf-8
                             //Content-Length: 202
                             //{ "jsonrpc":"2.0","id":"d95cc745587346b4bf7df2b13ec0890a-3","method":"tools/call","params":{ "name":"Echo","arguments":{ "message":"tesrt"} } }
-                            //Accepted
-                            ctx.Response.SendChunked = true;
-                            ctx.Response.StatusCode = 202;
-                            //ctx.Response.ContentType = "text/plain; charset=utf-8";
-                            using (var responseWriter = new StreamWriter(ctx.Response.OutputStream, new UTF8Encoding(false)))
-                            {
-                                responseWriter.Write("Accepted");
-                                responseWriter.BaseStream.Flush();
-                            }
                             try
                             {
                                 Debug.WriteLine("Params: " + json["params"]);
@@ -747,10 +807,10 @@ namespace DotNetPlugin
                                     isError = true;
                                 }
 
-                                var responseJson = new JavaScriptSerializer().Serialize(new
+                                var responsePayload = new
                                 {
                                     jsonrpc = "2.0",
-                                    id = json["id"],
+                                    id = requestId,
                                     result = new
                                     {
                                         content = new object[] {
@@ -761,24 +821,26 @@ namespace DotNetPlugin
                                         },
                                         isError = isError
                                     }
-                                });
+                                };
 
-                                StreamWriter writer;
-                                lock (_sseSessions)
+                                if (isStreamableHttpPost)
                                 {
-                                    writer = _sseSessions[query];
-                                    writer.Write($"data: {responseJson}\n\n");
-                                    writer.Flush();
+                                    SendJsonResponse(ctx, responsePayload);
                                 }
-                                Debug.WriteLine("Responding with Session:" + query);
+                                else
+                                {
+                                    SendSsePayload(query, responsePayload);
+                                    Debug.WriteLine("Responding with Session:" + query);
+                                    SendAcceptedResponse(ctx);
+                                }
                             }
                             catch (Exception ex)
                             {
                                 // Handle general errors
-                                var errorJson = new JavaScriptSerializer().Serialize(new
+                                var errorPayload = new
                                 {
                                     jsonrpc = "2.0",
-                                    id = json["id"],
+                                    id = requestId,
                                     result = new
                                     {
                                         content = new object[] {
@@ -789,23 +851,18 @@ namespace DotNetPlugin
                                     },
                                         isError = true
                                     }
-                                });
+                                };
 
-                                StreamWriter writer;
-                                lock (_sseSessions)
+                                if (isStreamableHttpPost)
                                 {
-                                    writer = _sseSessions[query];
-                                    writer.Write($"data: {errorJson}\n\n");
-                                    writer.Flush();
+                                    SendJsonResponse(ctx, errorPayload);
                                 }
-
+                                else
+                                {
+                                    SendSsePayload(query, errorPayload);
+                                    SendAcceptedResponse(ctx);
+                                }
                                 Console.WriteLine($"Error processing tools/call: {ex.Message}");
-                            }
-                            finally
-                            {
-                                //lock (_sseSessions)
-                                //    _sseSessions.Remove(sessionId);
-                                //ctx.Response.Close();
                             }
                         }
                         else if (_commands.TryGetValue(method, out var methodInfo))
@@ -822,18 +879,15 @@ namespace DotNetPlugin
                                     result = result
                                 };
 
-                                var sseData = new JavaScriptSerializer().Serialize(response);
-
-                                lock (_sseSessions)
+                                if (isStreamableHttpPost)
                                 {
-                                    var writer = _sseSessions[query];
-                                    writer.Write($"id: {json["id"]}\n");
-                                    writer.Write($"data: {sseData}\n\n");
-                                    writer.Flush();
+                                    SendJsonResponse(ctx, response);
                                 }
-
-                                ctx.Response.StatusCode = 202;
-                                ctx.Response.Close();
+                                else
+                                {
+                                    SendSsePayload(query, response, requestId);
+                                    SendAcceptedResponse(ctx);
+                                }
                             }
                             catch (Exception ex)
                             {
@@ -844,18 +898,15 @@ namespace DotNetPlugin
                                     error = new { code = -32603, message = ex.Message }
                                 };
 
-                                var sseData = new JavaScriptSerializer().Serialize(response);
-
-                                lock (_sseSessions)
+                                if (isStreamableHttpPost)
                                 {
-                                    var writer = _sseSessions[query];
-                                    writer.Write($"id: {json["id"]}\n");
-                                    writer.Write($"data: {sseData}\n\n");
-                                    writer.Flush();
+                                    SendJsonResponse(ctx, response);
                                 }
-
-                                ctx.Response.StatusCode = 500;
-                                ctx.Response.Close();
+                                else
+                                {
+                                    SendSsePayload(query, response, requestId);
+                                    SendAcceptedResponse(ctx);
+                                }
                             }
                         }
                         else
@@ -867,18 +918,15 @@ namespace DotNetPlugin
                                 error = new { code = -32601, message = "Unknown method" }
                             };
 
-                            var sseData = new JavaScriptSerializer().Serialize(response);
-
-                            lock (_sseSessions)
+                            if (isStreamableHttpPost)
                             {
-                                var writer = _sseSessions[query];
-                                writer.Write($"id: {json["id"]}\n");
-                                writer.Write($"data: {sseData}\n\n");
-                                writer.Flush();
+                                SendJsonResponse(ctx, response);
                             }
-
-                            ctx.Response.StatusCode = 404;
-                            ctx.Response.Close();
+                            else
+                            {
+                                SendSsePayload(query, response, requestId);
+                                SendAcceptedResponse(ctx);
+                            }
                         }
                     }
                 }
@@ -919,42 +967,41 @@ namespace DotNetPlugin
                     ctx.Response.OutputStream.Write(buffer, 0, buffer.Length);
                     ctx.Response.Close();
                 }
-                else if (path.EndsWith("/sse/") || path.EndsWith("/sse"))
+                else if (path.EndsWith("/sse/") || path.EndsWith("/sse") || path.EndsWith("/mcp/") || path.EndsWith("/mcp"))
                 {
                     ctx.Response.ContentType = "text/event-stream";
                     ctx.Response.StatusCode = 200;
                     ctx.Response.SendChunked = true;
                     ctx.Response.Headers.Add("Cache-Control", "no-store");
 
-                    string sessionId = "";
-
-                    using (var rng = RandomNumberGenerator.Create())
+                    string sessionId = GetStreamableSessionId(ctx.Request);
+                    bool isLegacySseHandshake = string.IsNullOrWhiteSpace(sessionId);
+                    if (isLegacySseHandshake)
                     {
-                        // Create a byte array of appropriate length (16 bytes = 128 bits)
-                        // This will result in a 22-character base64 string after encoding
-                        byte[] randomBytes = new byte[16];
-
-                        // Fill the array with random bytes
-                        rng.GetBytes(randomBytes);
-
-                        // Convert to Base64 string
-                        string base64String = Convert.ToBase64String(randomBytes);
-
-                        // Remove any padding characters (=) and replace any characters that could be problematic in URLs
-                        string result = base64String.TrimEnd('=').Replace('/', 'A').Replace('+', '-');
-                        sessionId = result;
+                        sessionId = CreateSessionId();
                     }
 
-                    var writer = new StreamWriter(ctx.Response.OutputStream);
+                    var writer = new StreamWriter(ctx.Response.OutputStream, new UTF8Encoding(false));
                     lock (_sseSessions)
+                    {
+                        if (_sseSessions.TryGetValue(sessionId, out var existingWriter))
+                        {
+                            try { existingWriter.Dispose(); } catch { }
+                        }
+
                         _sseSessions[sessionId] = writer;
+                    }
 
-                    // Write required handshake format
-                    writer.Write($"event: endpoint\n");
-                    writer.Write($"data: /message?sessionId={sessionId}\n\n");
+                    if (isLegacySseHandshake)
+                    {
+                        writer.Write("event: endpoint\n");
+                        writer.Write($"data: /message?sessionId={sessionId}\n\n");
+                    }
+                    else
+                    {
+                        writer.Write(":\n\n");
+                    }
                     writer.Flush();
-
-                    //string sessionId = "yMy7lcIzpSQT0ZCTrlGbkw"; //Guid.NewGuid().ToString("N");
                 }
                 else
                 {
